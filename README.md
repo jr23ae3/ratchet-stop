@@ -15,7 +15,7 @@ Chrome extension for **market entry, trailing stop-limits, and flatten** on [Ves
 1. `npm install`
 2. `npm run build:release` → creates **`release/`** (obfuscated JS).
 3. **Chrome Web Store**: zip `release/` only — never upload the source tree.
-4. Keep the Git repo **private** (GitHub private, or Cursor Origin without public clone).
+4. **GitHub releases** (recommended for users): [Latest release](https://github.com/jr23ae3/ratchet-stop/releases/latest) — download `ratchet-stop-v*-extension.zip`, unzip, **Load unpacked** → the unzipped folder. Source is public; ship the obfuscated zip, not a raw clone, when you want less readable JS.
 
 See [docs/LICENSE_API.md](./docs/LICENSE_API.md) to turn on paid keys.
 
