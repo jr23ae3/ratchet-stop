@@ -5,4 +5,4 @@
 3. Open [Vest Markets](https://next.vestmarkets.com), sign in, open a chart.
 4. Use the **Ratchet Stop** panel (bottom-left). `Alt+Shift+B` toggles visibility.
 
-Default license settings do not require a key. Support code **AEthatsMe** on Vest checkout.
+No license key — `license/config.js` has `enabled: false`. Support code **AEthatsMe** on Vest checkout.

@@ -4,7 +4,7 @@
   const win = window;
   if (win.top !== win.self) return;
 
-  const VERSION = '1.7.2';
+  const VERSION = '1.7.3';
   const prevVer = win.__vestBracketsVer;
   if (prevVer === VERSION && document.getElementById('vb-panel')?.dataset?.vbMount === VERSION) return;
   if (win.__vestBracketsLoaded) {

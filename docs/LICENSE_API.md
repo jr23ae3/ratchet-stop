@@ -1,6 +1,6 @@
 # License validation API
 
-Ratchet Stop checks a license when `license/config.js` has `enforce: true` and `apiUrl` set.
+Ratchet Stop checks a license only when `license/config.js` has `enabled: true`, `enforce: true`, and `apiUrl` set.
 
 ## Request
 

@@ -20,8 +20,9 @@
 
   function devOk() {
     const c = CFG();
-    if (!c.enforce) return { ok: true, reason: 'dev', enforce: false };
-    if (!c.apiUrl) return { ok: true, reason: 'no_api', enforce: false };
+    if (c.enabled === false) return { ok: true, reason: 'off', enforce: false, keySet: false };
+    if (!c.enforce) return { ok: true, reason: 'dev', enforce: false, keySet: false };
+    if (!c.apiUrl) return { ok: true, reason: 'no_api', enforce: false, keySet: false };
     return null;
   }
 

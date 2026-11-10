@@ -2,7 +2,9 @@
 // For production: set enforce: true and your validate URL.
 
 self.LGP_LICENSE = {
-  /** When true, trading features require a valid license key (popup). */
+  /** When false, license UI and API checks are disabled entirely. */
+  enabled: false,
+  /** When true (and enabled), trading requires a valid license key (popup). */
   enforce: false,
   /** POST JSON { key, product, extensionId } → { ok, exp } */
   apiUrl: '',

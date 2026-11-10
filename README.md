@@ -31,14 +31,15 @@ See [docs/LICENSE_API.md](./docs/LICENSE_API.md) to turn on paid keys.
 
 **Note:** Browser extensions cannot be made uncopyable. This stack deters casual clones and supports licensed distribution.
 
-### Enable license enforcement
+### Enable license enforcement (later)
 
 1. Deploy validate API (example in `docs/LICENSE_API.md`).
-2. Edit `license/config.js`: `enforce: true`, `apiUrl: 'https://your-server/...'`.
+2. Edit `license/config.js`: `enabled: true`, `enforce: true`, `apiUrl: 'https://your-server/...'`.
+3. Restore license UI in `popup.html` if you removed it (or ship a build that includes it).
 3. Add your API host to `manifest.json` `host_permissions` if needed.
 4. Rebuild release and publish.
 
-Default `enforce: false` keeps your current dev / friends install working without keys.
+Default `enabled: false` — no license UI or checks. Turn on later with `enabled: true` + `enforce: true` and an API URL.
 
 ## Support code
 

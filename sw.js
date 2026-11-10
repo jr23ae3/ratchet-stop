@@ -12,13 +12,15 @@ async function getLicenseCached(force) {
 }
 
 chrome.runtime.onInstalled.addListener(() => {
-  getLicenseCached(true).catch(() => {});
+  if (self.LGP_LICENSE?.enabled !== false) getLicenseCached(true).catch(() => {});
 });
 
-chrome.alarms?.create?.('lgp_license_check', { periodInMinutes: 360 });
-chrome.alarms?.onAlarm?.addListener?.((a) => {
-  if (a.name === 'lgp_license_check') getLicenseCached(true).catch(() => {});
-});
+if (self.LGP_LICENSE?.enabled !== false) {
+  chrome.alarms?.create?.('lgp_license_check', { periodInMinutes: 360 });
+  chrome.alarms?.onAlarm?.addListener?.((a) => {
+    if (a.name === 'lgp_license_check') getLicenseCached(true).catch(() => {});
+  });
+}
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.type === 'state' && sender.tab) {
@@ -33,6 +35,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
   if (msg?.type === 'setLicenseKey') {
+    if (self.LGP_LICENSE?.enabled === false) {
+      sendResponse({ ok: true, reason: 'off', enforce: false, keySet: false });
+      return true;
+    }
     self.LGP_setLicenseKey(msg.key)
       .then((license) => {
         licenseMemo = { at: Date.now(), data: license };
