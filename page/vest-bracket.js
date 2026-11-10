@@ -4,7 +4,7 @@
   const win = window;
   if (win.top !== win.self) return;
 
-  const VERSION = '1.7.5';
+  const VERSION = '1.7.6';
   const prevVer = win.__vestBracketsVer;
   if (prevVer === VERSION && document.getElementById('vb-panel')?.dataset?.vbMount === VERSION) return;
   if (win.__vestBracketsLoaded) {
@@ -2054,12 +2054,12 @@
       toast(msg);
       setStatus('USD mode — every Long/Short uses Vest’s ticket');
       if (S.trailEnabled) {
-        void afterFillArmTrail(activeChartSymbol(), vestOpenSample.positionId || vbTrail.lastOpenId, side);
+        await afterFillArmTrail(activeChartSymbol(), vestOpenSample.positionId || vbTrail.lastOpenId, side);
       }
       return { native: true, quantity: vestOpenSample.quantity };
     }
     setAction(`${tag} clicked on Vest — check fill / error on the ticket`, 'ok');
-    if (S.trailEnabled) void afterFillArmTrail(activeChartSymbol(), vbTrail.lastOpenId, side);
+    if (S.trailEnabled) await afterFillArmTrail(activeChartSymbol(), vbTrail.lastOpenId, side);
     return { native: true };
   }
 
@@ -2292,11 +2292,18 @@
     return Number.isFinite(v) ? v : 0;
   }
 
+  function slLegId(l) {
+    if (l?.stopLossId != null) return String(l.stopLossId);
+    if (l?.id != null) return String(l.id);
+    if (l?.orderId != null) return String(l.orderId);
+    return '';
+  }
+
   function parseSlLegs(row) {
     return (Array.isArray(row?.stopLosses) ? row.stopLosses : [])
-      .filter((l) => l && (l.id != null || l.orderId != null || l.triggerPrice != null || l.trigger != null))
+      .filter((l) => l && (slLegId(l) || l.triggerPrice != null || l.trigger != null))
       .map((l) => ({
-        id: l.id != null ? String(l.id) : (l.orderId != null ? String(l.orderId) : ''),
+        id: slLegId(l),
         trigger: parseFloat(l.triggerPrice != null ? l.triggerPrice : l.trigger),
         limit: parseFloat(l.limitPrice != null ? l.limitPrice : l.limit),
         exec: String(l.executionType || 'market').toLowerCase(),
@@ -2309,13 +2316,15 @@
     if (!id) return;
     const sl = parseSlLegs(row)[0];
     const { start } = trailCfg();
+    const entry = positionEntry(row) || snapMarketPrice() || lastKnownMid || 0;
     vbTrail.armed.set(id, {
       best: null,
       active: start <= 0,
       side: positionSide(row),
       symbol: row.symbol,
-      entry: positionEntry(row),
+      entry,
       legId: sl?.id || null,
+      missRows: 0,
       lastTrig: sl?.trigger || null,
       lastLimit: sl?.limit || null,
       busy: false,
@@ -2338,7 +2347,9 @@
     if (!force && Date.now() - vbPosCache.at < cacheMs && vbPosCache.rows.length) return vbPosCache.rows;
     try {
       const rows = await fetchOpenPositions(accountId);
-      vbPosCache = { at: Date.now(), rows };
+      if (rows.length) vbPosCache = { at: Date.now(), rows };
+      else if (force || vbPosCache.rows.length) return vbPosCache.rows;
+      vbPosCache = { at: Date.now(), rows: [] };
       return rows;
     } catch {
       return vbPosCache.rows;
@@ -2440,11 +2451,13 @@
         return;
       }
       armTrailFromRow(row, { quiet: true });
-      const st = vbTrail.armed.get(String(row.positionId));
+      const pid = String(row.positionId);
+      const st = vbTrail.armed.get(pid);
       if (st && !st.legId) {
         st.legId = await ensureTrailStopOnPosition(row) || null;
       }
       void vbTrailTick();
+      void refreshTrailLegFromServer(pid);
       toast(`Trailing stop-limit armed · ${trailCfg().dist} pt trail`);
     } catch (e) {
       toast(`Trail arm failed: ${e?.message || e}`);
@@ -2491,7 +2504,7 @@
 
   async function vbTrailTick() {
     if (!S.trailEnabled || !vbTrail.armed.size || !token) return;
-    const mid = snapMarketPrice();
+    const mid = snapMarketPrice() || liveMidPrice() || lastKnownMid;
     if (!(mid > 0)) return;
     let rows = [];
     try {
@@ -2501,11 +2514,17 @@
     }
     const now = Date.now();
     for (const [id, st] of [...vbTrail.armed.entries()]) {
-      const row = rows.find((p) => String(p.positionId) === id);
+      let row = rows.find((p) => String(p.positionId) === id);
       if (!row) {
-        vbTrail.armed.delete(id);
+        st.missRows = (st.missRows || 0) + 1;
+        if (st.missRows >= 12) {
+          vbTrail.armed.delete(id);
+        }
         continue;
       }
+      st.missRows = 0;
+      const ep = positionEntry(row);
+      if (ep > 0) st.entry = ep;
       const sl = parseSlLegs(row)[0];
       if (sl && sl.id !== st.legId) {
         st.legId = sl.id;
@@ -2531,10 +2550,17 @@
         if (!st.legId) {
           st.legId = await ensureTrailStopOnPosition(row);
           if (!st.legId) throw new Error('no stop-loss leg');
-          const sl = parseSlLegs(row)[0];
-          if (sl?.trigger != null) {
-            st.lastTrig = sl.trigger;
-            st.lastLimit = sl.limit;
+          vbPosCache = { at: 0, rows: [] };
+          const freshRows = await cachedOpenPositions(true);
+          const fresh = freshRows.find((p) => String(p.positionId) === id);
+          const slFresh = parseSlLegs(fresh || row)[0];
+          if (slFresh?.id) st.legId = slFresh.id;
+          if (slFresh?.trigger != null) {
+            st.lastTrig = slFresh.trigger;
+            st.lastLimit = slFresh.limit;
+          } else if (r.trigger != null) {
+            st.lastTrig = parseFloat(r.trigger);
+            st.lastLimit = parseFloat(r.limit);
           }
           st.fails = 0;
           continue;
