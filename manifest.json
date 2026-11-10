@@ -1,0 +1,46 @@
+{
+  "manifest_version": 3,
+  "name": "LetsGetPaid",
+  "short_name": "LetsGetPaid",
+  "version": "1.7.0",
+  "description": "LetsGetPaid panel on Vest Markets — market entry, trailing stop-limits, close and flatten.",
+  "minimum_chrome_version": "116",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_title": "LetsGetPaid",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png"
+    }
+  },
+  "background": {
+    "service_worker": "sw.js"
+  },
+  "permissions": ["storage", "alarms"],
+  "optional_host_permissions": ["https://*/*"],
+  "host_permissions": [
+    "https://next.vestmarkets.com/*",
+    "https://api-gateway.hz.vestmarkets.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://next.vestmarkets.com/*"],
+      "js": ["page/vest-bracket.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": false
+    },
+    {
+      "matches": ["https://next.vestmarkets.com/*"],
+      "js": ["bridge.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+node_modules/
+release/
+dist/
+.DS_Store
+.env
+.env.*
+*.pem
+*.crx
+*.zip
+license/config.local.js
+secrets/

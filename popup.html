@@ -1,0 +1,42 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>LetsGetPaid</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <span class="logo" aria-hidden="true">LGP</span>
+    <div>
+      <div class="name">LetsGetPaid</div>
+      <div class="by">Market + trailing stop-limit · <span id="ver"></span></div>
+    </div>
+  </header>
+  <section id="off">
+    <ol class="steps">
+      <li>Open Vest and sign in.</li>
+      <li>Open a chart (e.g. NQ-PERP).</li>
+      <li>Use the panel <b>bottom-left</b> on the page.</li>
+    </ol>
+    <p class="muted">Panel hidden? Press <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>B</kbd> on Vest.</p>
+    <button id="open-vest" class="primary" type="button">Open Vest</button>
+  </section>
+  <section id="license-box">
+    <h3 class="lic-h">License</h3>
+    <p class="muted" id="license-hint">Optional until enforcement is enabled by the author.</p>
+    <label class="lic-field">Key <input id="license-key" type="password" autocomplete="off" spellcheck="false"></label>
+    <button id="license-save" type="button">Activate</button>
+    <p id="license-msg" class="muted" role="status"></p>
+  </section>
+  <section id="on" hidden>
+    <div class="status"><span id="dot" class="dot"></span><span id="status-text">connecting…</span></div>
+    <ol class="steps">
+      <li>Set <b>size</b> on Vest’s ticket (right column).</li>
+      <li>Optional: tap <b>Sync from Vest</b> for size preview.</li>
+      <li><b>Long</b> / <b>Short</b> + optional trailing stop-limit (panel).</li>
+    </ol>
+  </section>
+  <script src="popup.js"></script>
+</body>
+</html>
