@@ -1,6 +1,6 @@
 # License validation API
 
-LetsGetPaid checks a license when `license/config.js` has `enforce: true` and `apiUrl` set.
+Ratchet Stop checks a license when `license/config.js` has `enforce: true` and `apiUrl` set.
 
 ## Request
 
@@ -9,7 +9,7 @@ LetsGetPaid checks a license when `license/config.js` has `enforce: true` and `a
 ```json
 {
   "key": "user-license-key",
-  "product": "letsgetpaid",
+  "product": "ratchetstop",
   "extensionId": "chrome-extension-id"
 }
 ```
@@ -41,7 +41,7 @@ export default {
   async fetch(req) {
     if (req.method !== 'POST') return new Response('Method not allowed', { status: 405 });
     const { key, product } = await req.json();
-    const allowed = product === 'letsgetpaid' && KEYS.has(String(key));
+    const allowed = product === 'ratchetstop' && KEYS.has(String(key));
     return Response.json(
       allowed
         ? { ok: true, exp: Date.now() + 30 * 86400000 }

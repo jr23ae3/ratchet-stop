@@ -1,8 +1,8 @@
 {
-  "name": "letsgetpaid-extension",
+  "name": "ratchet-stop-extension",
   "private": true,
-  "version": "1.7.0",
-  "description": "LetsGetPaid Chrome extension — source tree (not for redistribution)",
+  "version": "1.7.1",
+  "description": "Ratchet Stop Chrome extension — source tree (not for redistribution)",
   "license": "UNLICENSED",
   "scripts": {
     "build:release": "node scripts/build-release.mjs"

@@ -1,4 +1,4 @@
-/* LetsGetPaid bridge. Copyright (c) 2026 LetsGetPaid. */
+/* Ratchet Stop bridge. Copyright (c) 2026 Ratchet Stop. */
 (() => {
   let lastState = null;
   let lastLicense = null;

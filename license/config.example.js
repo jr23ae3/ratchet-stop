@@ -6,7 +6,7 @@ self.LGP_LICENSE = {
   enforce: false,
   /** POST JSON { key, product, extensionId } → { ok, exp } */
   apiUrl: '',
-  product: 'letsgetpaid',
+  product: 'ratchetstop',
   /** Re-validate after this many hours when cached. */
   recheckHours: 6,
   /** Allow offline use this many hours after last successful check. */

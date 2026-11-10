@@ -1,4 +1,4 @@
-/* LetsGetPaid service worker. Copyright (c) 2026 LetsGetPaid. All rights reserved. */
+/* Ratchet Stop service worker. Copyright (c) 2026 Ratchet Stop. */
 importScripts('license/config.js', 'license/validator.js');
 
 let licenseMemo = { at: 0, data: { ok: true, reason: 'init', enforce: false } };

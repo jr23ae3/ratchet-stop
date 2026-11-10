@@ -1,6 +1,6 @@
-/* LetsGetPaid — license validation (service worker). Copyright (c) 2026 LetsGetPaid. */
+/* Ratchet Stop — license validation (service worker). Copyright (c) 2026 Ratchet Stop. */
 (function () {
-  const CFG = () => self.LGP_LICENSE || { enforce: false, apiUrl: '', graceHours: 72, recheckHours: 6, product: 'letsgetpaid' };
+  const CFG = () => self.LGP_LICENSE || { enforce: false, apiUrl: '', graceHours: 72, recheckHours: 6, product: 'ratchetstop' };
   const STORAGE_KEY = 'lgp_license_cache';
 
   async function readCache() {
@@ -47,7 +47,7 @@
     if (!url) return { ok: false, reason: 'no_api' };
     const body = JSON.stringify({
       key: String(key || ''),
-      product: c.product || 'letsgetpaid',
+      product: c.product || 'ratchetstop',
       extensionId: chrome.runtime.id,
     });
     const res = await fetch(url, {

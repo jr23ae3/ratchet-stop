@@ -1,4 +1,4 @@
-/* LetsGetPaid popup. Copyright (c) 2026 LetsGetPaid. */
+/* Ratchet Stop popup. Copyright (c) 2026 Ratchet Stop. */
 const VEST = 'https://next.vestmarkets.com/trade/NQ-PERP';
 const $ = (s) => document.querySelector(s);
 let tabId = null;

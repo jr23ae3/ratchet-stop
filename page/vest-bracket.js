@@ -1,10 +1,10 @@
-/* LetsGetPaid — proprietary. Copyright (c) 2026 LetsGetPaid. See legal/LICENSE. */
+/* Ratchet Stop — proprietary. Copyright (c) 2026 Ratchet Stop. See legal/LICENSE. */
 (function () {
   'use strict';
   const win = window;
   if (win.top !== win.self) return;
 
-  const VERSION = '1.7.0';
+  const VERSION = '1.7.1';
   const prevVer = win.__vestBracketsVer;
   if (prevVer === VERSION && document.getElementById('vb-panel')?.dataset?.vbMount === VERSION) return;
   if (win.__vestBracketsLoaded) {
@@ -88,8 +88,8 @@
   function assertLicensed(action) {
     if (licenseOk) return;
     const msg = licenseEnforced
-      ? `LetsGetPaid needs a license — open the extension popup and enter your key. (${licenseReason || action})`
-      : 'LetsGetPaid is locked on this install.';
+      ? `Ratchet Stop needs a license — open the extension popup and enter your key. (${licenseReason || action})`
+      : 'Ratchet Stop is locked on this install.';
     setAction(msg, 'err');
     toast(msg);
     throw new Error(msg);
@@ -103,7 +103,7 @@
       return;
     }
     ready.textContent = licenseEnforced
-      ? 'License required — open LetsGetPaid popup → enter your key'
+      ? 'License required — open Ratchet Stop popup → enter your key'
       : 'This copy is not licensed for use';
     ready.className = 'vb-ready vb-warn';
   }
@@ -2863,7 +2863,7 @@
     panel.dataset.vbMount = VERSION;
     panel.hidden = !S.showPanel;
     panel.innerHTML = `
-      <h2>LetsGetPaid</h2>
+      <h2>Ratchet Stop</h2>
       <p class="vb-support">Support code <code>${SUPPORT_CODE}</code> — auto-applied at Vest checkout</p>
       <p class="vb-help">
         <b>Market entry</b> with optional <b>trailing stop-limit</b>. USD size → Vest’s Long/Short, then we arm the trail. <b>Close</b> = this chart; <b>Flatten all</b> = account.

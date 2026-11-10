@@ -1,6 +1,6 @@
-# LetsGetPaid — End User License Agreement
+# Ratchet Stop — End User License Agreement
 
-By installing or using LetsGetPaid you agree to the following.
+By installing or using Ratchet Stop you agree to the following.
 
 ## Permitted use
 
@@ -15,7 +15,7 @@ By installing or using LetsGetPaid you agree to the following.
 
 ## Trading risk
 
-LetsGetPaid is a tool, not financial advice. You are responsible for all orders,
+Ratchet Stop is a tool, not financial advice. You are responsible for all orders,
 stops, and losses. Test on small size first.
 
 ## Privacy
