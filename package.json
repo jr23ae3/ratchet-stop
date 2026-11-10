@@ -1,7 +1,7 @@
 {
   "name": "ratchet-stop-extension",
   "private": true,
-  "version": "1.7.4",
+  "version": "1.7.5",
   "description": "Ratchet Stop Chrome extension — source tree (not for redistribution)",
   "license": "UNLICENSED",
   "scripts": {

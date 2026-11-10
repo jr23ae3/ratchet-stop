@@ -4,7 +4,7 @@
   const win = window;
   if (win.top !== win.self) return;
 
-  const VERSION = '1.7.4';
+  const VERSION = '1.7.5';
   const prevVer = win.__vestBracketsVer;
   if (prevVer === VERSION && document.getElementById('vb-panel')?.dataset?.vbMount === VERSION) return;
   if (win.__vestBracketsLoaded) {
@@ -721,24 +721,72 @@
     return best;
   }
 
+  function pctButtonSelected(b) {
+    if (!b) return false;
+    const st = b.getAttribute('data-state');
+    if (st === 'on' || st === 'checked' || st === 'active') return true;
+    for (const a of ['aria-pressed', 'aria-checked', 'data-checked', 'data-selected']) {
+      const v = b.getAttribute(a);
+      if (v === 'true' || v === '1') return true;
+    }
+    const cls = b.className || '';
+    if (/\b(active|selected|is-selected|data-state-on)\b/i.test(cls)) return true;
+    if (b.getAttribute('role') === 'radio' && b.getAttribute('aria-checked') !== 'false') {
+      const grp = b.closest('[role="radiogroup"]');
+      if (grp && grp.contains(b) && b.matches?.('[aria-checked="true"]')) return true;
+    }
+    return false;
+  }
+
   function readPctPresetOnTicket() {
     const panel = findOrderPanel() || document;
     for (const p of [100, 50, 25, 10]) {
-      const b = panel.querySelector(`[data-testid="size-pct-${p}"]`);
+      const b = panel.querySelector(`[data-testid="size-pct-${p}"]`)
+        || qVest(`[data-testid="size-pct-${p}"]`);
       if (!b) continue;
-      const on = b.getAttribute('data-state') === 'on'
-        || b.getAttribute('aria-pressed') === 'true'
-        || b.getAttribute('aria-checked') === 'true'
-        || /\bactive\b/i.test(b.className || '');
-      if (on) return p;
+      if (pctButtonSelected(b)) return p;
     }
     return null;
+  }
+
+  function readPercentFromStores() {
+    let best = null;
+    const seed = qVest('[data-testid="size-input"]') || qVest('[data-testid="size-unit-toggle"]')
+      || qVest('[data-testid="submit-long"]');
+    const bump = (v) => {
+      const c = pctClean(v);
+      if (c != null) best = c;
+    };
+    const scan = (obj, depth, seen) => {
+      if (!obj || depth > 7 || typeof obj !== 'object' || seen.has(obj)) return;
+      seen.add(obj);
+      for (const k of ['percent', 'pct', 'sizePercent', 'positionPercent', 'orderPercent', 'sizePct']) {
+        if (k in obj) bump(obj[k]);
+      }
+      const su = obj.sizeUnit ?? obj.unit ?? obj.quoteUnit;
+      if (su != null && /percent|pct|%/i.test(String(su))) {
+        bump(obj.size);
+        bump(obj.amount);
+      }
+      for (const k of ['draft', 'order', 'orderForm', 'form', 'values', 'orderDraft', 'ticket']) {
+        if (obj[k] && typeof obj[k] === 'object') scan(obj[k], depth + 1, seen);
+      }
+    };
+    walkZustandStores(seed, (st) => {
+      if (st && typeof st === 'object') scan(st, 0, new Set());
+    });
+    return best;
   }
 
   function resolveTicketSize() {
     const readOnce = () => {
       const panel = findOrderPanel();
       const sizeInp = qVest('[data-testid="size-input"]') || findVestAmountInput();
+      const unit = ticketSizeUnit();
+      if (unit === 'pct') {
+        const p = readPctPresetOnTicket() || readPercentFromStores();
+        if (isValidPct(p)) return pctClean(p);
+      }
       if (sizeInp) {
         const raw = readReactInputValue(sizeInp);
         const pct = pctClean(raw);
@@ -757,7 +805,9 @@
       const fromStore = readSizeFromStores();
       if (fromStore > 0) return fromStore;
       const pctPreset = readPctPresetOnTicket();
-      if (pctPreset != null) return pctPreset;
+      if (isValidPct(pctPreset)) return pctPreset;
+      const storePct = readPercentFromStores();
+      if (isValidPct(storePct)) return storePct;
       return null;
     };
     let v = readOnce();
@@ -1023,8 +1073,10 @@
   }
 
   function ticketSizeUnit() {
+    const fromFiber = readSizeUnitFromFiber();
+    if (fromFiber) return fromFiber;
     const tog = qVest('[data-testid="size-unit-toggle"]');
-    const t = (tog?.textContent || '').replace(/\s+/g, ' ').trim().toUpperCase();
+    const t = vestUnitToggleText(tog).replace(/\s+/g, ' ').trim().toUpperCase();
     if (t.includes('USD')) return 'usd';
     if (t.includes('%') || t.includes('PCT') || t.includes('PERCENT')) return 'pct';
     const sel = qVest('[data-testid="size-unit-select"]');
@@ -1056,19 +1108,52 @@
     return Math.round(n * 100) / 100;
   }
 
+  function isValidPct(v) {
+    return pctClean(v) != null;
+  }
+
+  function vestUnitToggleText(tog) {
+    if (!tog) return '';
+    return [
+      tog.textContent,
+      tog.getAttribute('aria-label'),
+      tog.getAttribute('title'),
+      tog.getAttribute('data-unit'),
+    ].filter(Boolean).join(' ');
+  }
+
+  function readSizeUnitFromFiber() {
+    const tog = qVest('[data-testid="size-unit-toggle"]') || qVest('[data-testid="size-input"]');
+    if (!tog) return null;
+    const norm = (s) => {
+      const u = String(s || '').toLowerCase();
+      if (!u) return null;
+      if (u.includes('usd') || u === 'dollar') return 'usd';
+      if (u.includes('percent') || u === 'pct' || u.includes('%')) return 'pct';
+      if (u.includes('mini')) return 'mini';
+      if (u.includes('micro')) return 'micro';
+      if (u.includes('contract') || u === 'token' || u === 'qty' || u === 'quantity') return 'token';
+      return null;
+    };
+    let f = fiberOf(tog);
+    for (let d = 0; f && d < 45; f = f.return, d++) {
+      const p = f.memoizedProps || f.pendingProps;
+      if (!p || typeof p !== 'object') continue;
+      for (const k of ['sizeUnit', 'unit', 'quoteUnit', 'activeUnit', 'selectedUnit', 'value']) {
+        const hit = norm(p[k]);
+        if (hit) return hit;
+      }
+    }
+    return null;
+  }
+
   function usesPercentSizing(unit, sizeVal) {
     if (unit === 'usd' || unit === 'mini' || unit === 'micro') return false;
     if (unit === 'pct') return true;
-    if (readPctPresetOnTicket() != null) return true;
-    const inp = qVest('[data-testid="size-input"]');
-    const blob = `${inp?.placeholder || ''} ${inp?.getAttribute('aria-label') || ''} ${inp?.parentElement?.textContent || ''}`;
-    if (/%|percent|trading power/i.test(blob)) return true;
+    if (isValidPct(readPctPresetOnTicket())) return true;
     const tog = qVest('[data-testid="size-unit-toggle"]');
-    const togTxt = (tog?.textContent || '').toUpperCase();
+    const togTxt = vestUnitToggleText(tog).toUpperCase();
     if (/%|PCT|PERCENT/.test(togTxt)) return true;
-    if (sizeVal > 0 && sizeVal <= 100) {
-      if (!togTxt.includes('USD') && !togTxt.includes('MINI') && !togTxt.includes('MICRO')) return true;
-    }
     return false;
   }
 
@@ -1535,20 +1620,29 @@
     let pctVal = null;
     let sizeVal = t.size;
     const preset = readPctPresetOnTicket();
-    if (preset != null) pctVal = preset;
+    if (isValidPct(preset)) pctVal = preset;
     if (sizeVal != null) {
       const asPct = pctClean(sizeVal);
       if (asPct != null) pctVal = asPct;
     }
-    const pctMode = usesPercentSizing(unit, pctVal || sizeVal);
+    let pctMode = usesPercentSizing(unit, pctVal || sizeVal);
     if (pctMode) {
-      pctVal = pctVal || pctClean(sizeVal);
-      if (pctVal == null && preset != null) pctVal = preset;
-      if (pctVal == null) {
-        const hint = t.sizeEl
-          ? 'Enter your % (1–100) or tap 10/25/50/100 on Vest’s ticket.'
-          : 'Open Vest’s order ticket on the right.';
-        throw new Error(`Could not read % size — ${hint}`);
+      if (!isValidPct(pctVal)) pctVal = pctClean(sizeVal);
+      if (!isValidPct(pctVal) && isValidPct(preset)) pctVal = preset;
+      if (!isValidPct(pctVal)) {
+        const fromStore = readPercentFromStores();
+        if (isValidPct(fromStore)) pctVal = fromStore;
+      }
+      if (!isValidPct(pctVal)) {
+        const contractLike = sizeVal > 0 && (sizeVal > 100 || (unit === 'token' && !isValidPct(sizeVal)));
+        if (contractLike) {
+          pctMode = false;
+        } else {
+          const hint = t.sizeEl
+            ? 'Enter your % (1–100) or tap 10/25/50/100 on Vest’s ticket.'
+            : 'Open Vest’s order ticket on the right.';
+          throw new Error(`Could not read % size — ${hint}`);
+        }
       }
     } else if (!sizeVal && vestOpenSample && Date.now() - vestOpenSample.at < 180000) {
       const q = parseFloat(vestOpenSample.quantity);
@@ -1586,6 +1680,10 @@
       } else if (vestOpenSample?.quantity) {
         quantity = formatQty(vestOpenSample.quantity);
         sizeSource = 'last-vest-order';
+      } else if (!isValidPct(pctVal)) {
+        throw new Error(
+          'Could not read % on Vest’s ticket — tap 10/25/50/100 (or type 1–100), then Sync.'
+        );
       } else {
         throw new Error(
           `For ${pctVal}%: place one market order on Vest (right-side Long/Short), then retry.`
