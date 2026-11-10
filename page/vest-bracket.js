@@ -4,7 +4,7 @@
   const win = window;
   if (win.top !== win.self) return;
 
-  const VERSION = '1.7.3';
+  const VERSION = '1.7.4';
   const prevVer = win.__vestBracketsVer;
   if (prevVer === VERSION && document.getElementById('vb-panel')?.dataset?.vbMount === VERSION) return;
   if (win.__vestBracketsLoaded) {
@@ -639,24 +639,54 @@
     return null;
   }
 
+  function readReactPropsValue(el) {
+    if (!el || typeof el !== 'object') return NaN;
+    const pk = Object.keys(el).find((k) => k.startsWith('__reactProps$'));
+    if (!pk) return NaN;
+    const p = el[pk];
+    if (!p || typeof p !== 'object') return NaN;
+    for (const key of ['value', 'defaultValue']) {
+      if (p[key] == null || String(p[key]) === '') continue;
+      const n = parseFloat(String(p[key]).replace(/,/g, ''));
+      if (n > 0) return n;
+    }
+    return NaN;
+  }
+
+  function readTicketAmountFromFiber(input) {
+    if (!input) return NaN;
+    let n = readReactPropsValue(input);
+    if (n > 0) return n;
+    const ticketKeys = ['value', 'size', 'amount', 'orderSize', 'inputValue', 'defaultValue'];
+    let f = fiberOf(input);
+    for (let d = 0; f && d < 45; f = f.return, d++) {
+      const p = f.memoizedProps || f.pendingProps;
+      if (p && typeof p === 'object') {
+        for (const k of ticketKeys) {
+          if (p[k] == null || String(p[k]) === '') continue;
+          const x = parseFloat(String(p[k]).replace(/,/g, ''));
+          if (x > 0 && x < 1e9) return x;
+        }
+      }
+      let s = f.memoizedState;
+      for (let i = 0; s && i < 30; s = s.next, i++) {
+        const m = s.memoizedState;
+        if (typeof m === 'number' && m > 0 && m < 1e9) return m;
+        if (typeof m === 'string' && m.trim() !== '') {
+          const x = parseFloat(m.replace(/,/g, ''));
+          if (x > 0 && x < 1e9) return x;
+        }
+      }
+    }
+    return NaN;
+  }
+
   function readReactInputValue(input) {
     if (!input) return NaN;
     let n = readInputNum(input);
     if (n > 0) return n;
-    const fk = Object.keys(input).find((k) => k.startsWith('__reactFiber$') || k.startsWith('__reactProps$'));
-    let f = fk ? input[fk] : null;
-    for (let d = 0; f && d < 35; f = f.return, d++) {
-      const p = f.memoizedProps;
-      if (p?.value != null && String(p.value) !== '') {
-        n = parseFloat(String(p.value).replace(/,/g, ''));
-        if (n > 0) return n;
-      }
-      if (p?.defaultValue != null && String(p.defaultValue) !== '') {
-        n = parseFloat(String(p.defaultValue).replace(/,/g, ''));
-        if (n > 0) return n;
-      }
-    }
-    return NaN;
+    n = readTicketAmountFromFiber(input);
+    return n > 0 ? n : NaN;
   }
 
   function readSizeFromStores() {
@@ -667,6 +697,16 @@
       const n = typeof v === 'bigint' ? Number(v) / (scale || 1e6) : Number(v);
       if (n > 0 && n < 1e9) best = best == null ? n : best;
     };
+    const scan = (obj, depth, seen) => {
+      if (!obj || depth > 6 || typeof obj !== 'object' || seen.has(obj)) return;
+      seen.add(obj);
+      for (const k of ['size', 'amount', 'orderSize', 'inputSize', 'sizeUsd']) {
+        if (k in obj) tryNum(obj[k], 1);
+      }
+      for (const k of ['draft', 'order', 'orderForm', 'form', 'values', 'orderDraft', 'ticket']) {
+        if (obj[k] && typeof obj[k] === 'object') scan(obj[k], depth + 1, seen);
+      }
+    };
     walkZustandStores(seed, (st) => {
       if (!st || typeof st !== 'object') return;
       tryNum(st.size, 1);
@@ -676,6 +716,7 @@
         tryNum(st.draft.size, 1);
         tryNum(st.draft.quantity, 1e6);
       }
+      scan(st, 0, new Set());
     });
     return best;
   }
@@ -695,27 +736,45 @@
   }
 
   function resolveTicketSize() {
-    const panel = findOrderPanel();
+    const readOnce = () => {
+      const panel = findOrderPanel();
+      const sizeInp = qVest('[data-testid="size-input"]') || findVestAmountInput();
+      if (sizeInp) {
+        const raw = readReactInputValue(sizeInp);
+        const pct = pctClean(raw);
+        if (pct != null) return pct;
+        if (raw > 0) return raw;
+      }
+      if (panel) {
+        const inputs = panel.querySelectorAll('input');
+        for (const inp of inputs) {
+          if (inp.closest('#vb-panel')) continue;
+          if (inp === qVest('[data-testid="price-input"]')) continue;
+          const v = readReactInputValue(inp);
+          if (v > 0 && v < 1e9) return v;
+        }
+      }
+      const fromStore = readSizeFromStores();
+      if (fromStore > 0) return fromStore;
+      const pctPreset = readPctPresetOnTicket();
+      if (pctPreset != null) return pctPreset;
+      return null;
+    };
+    let v = readOnce();
+    if (v != null && v > 0) return v;
+    nudgeVestSizeRecalc();
+    v = readOnce();
+    if (v != null && v > 0) return v;
     const sizeInp = qVest('[data-testid="size-input"]') || findVestAmountInput();
     if (sizeInp) {
-      const raw = readReactInputValue(sizeInp);
-      const pct = pctClean(raw);
-      if (pct != null) return pct;
-      if (raw > 0) return raw;
-    }
-    if (panel) {
-      const inputs = panel.querySelectorAll('input');
-      for (const inp of inputs) {
-        if (inp.closest('#vb-panel')) continue;
-        if (inp === qVest('[data-testid="price-input"]')) continue;
-        const v = readReactInputValue(inp);
-        if (v > 0 && v < 1e9) return v;
+      const fromFiber = readTicketAmountFromFiber(sizeInp);
+      if (fromFiber > 0) return fromFiber;
+      const unit = ticketSizeUnit();
+      if (unit === 'token') {
+        const q = readQtyFromFiber({ usdHint: NaN });
+        if (q > 0 && q < 1e6) return q;
       }
     }
-    const fromStore = readSizeFromStores();
-    if (fromStore > 0) return fromStore;
-    const pctPreset = readPctPresetOnTicket();
-    if (pctPreset != null) return pctPreset;
     return null;
   }
 
@@ -1181,10 +1240,10 @@
     return NaN;
   }
 
-  function readQtyFromFiber() {
+  function readQtyFromFiber(opts = {}) {
     const meta = readMarketMeta();
     const step = meta.step;
-    const usd = snapVestTicket().size;
+    const usd = opts.usdHint;
     let best = null;
     const roots = [
       qVest('[data-testid="size-input"]'),
@@ -1385,7 +1444,7 @@
   function resolveUsdQuantity(sym, usdVal, lev) {
     nudgeVestSizeRecalc();
     const u = usdKey(usdVal);
-    const fiberQ = readQtyFromFiber();
+    const fiberQ = readQtyFromFiber({ usdHint: u });
     if (fiberQ > 0) return { quantity: formatQty(fiberQ), source: 'vest-fiber' };
     const equiv = readTicketSizeEquiv();
     if (equiv > 0 && !looksLikeUsdInput(equiv, u)) {
@@ -1495,9 +1554,20 @@
       const q = parseFloat(vestOpenSample.quantity);
       if (q > 0) sizeVal = q;
     }
+    if (!pctMode && !sizeVal && t.sizeEl) {
+      try {
+        const inp = qVest('[data-testid="size-input"]') || findVestAmountInput();
+        if (inp) {
+          inp.focus({ preventScroll: true });
+          nudgeVestSizeRecalc();
+          const retry = resolveTicketSize();
+          if (retry > 0) sizeVal = retry;
+        }
+      } catch {}
+    }
     if (!pctMode && !sizeVal) {
       const hint = t.sizeEl
-        ? 'Click in Vest’s size box once, then retry (we could not read its value).'
+        ? 'Enter size on Vest’s ticket, or click the size box once and retry.'
         : 'Open Vest’s order ticket on the right (Long/Short visible).';
       throw new Error(`Could not read size — ${hint}`);
     }
