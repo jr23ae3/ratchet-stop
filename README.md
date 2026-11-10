@@ -4,9 +4,13 @@ Chrome extension for **market entry, trailing stop-limits, and flatten** on [Ves
 
 **Proprietary software** — see [legal/LICENSE](./legal/LICENSE) and [EULA](./EULA.md). Do not redistribute source or release builds without permission.
 
+## Quick start (public install)
+
+See **[INSTALL.md](./INSTALL.md)** — clone this repo, **Load unpacked** on the repo root, use on Vest. No license key required with default settings.
+
 ## Quick start (development)
 
-1. `chrome://extensions` → Developer mode → **Load unpacked** → this repo root (for your own work).
+1. `chrome://extensions` → Developer mode → **Load unpacked** → this repo root.
 2. Open Vest, sign in, open a chart. Panel is bottom-left (`Alt+Shift+B`).
 3. Sync, then Long/Short / trail / Close / Flatten.
 
