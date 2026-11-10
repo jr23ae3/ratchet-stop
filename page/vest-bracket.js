@@ -4,7 +4,7 @@
   const win = window;
   if (win.top !== win.self) return;
 
-  const VERSION = '1.7.1';
+  const VERSION = '1.7.2';
   const prevVer = win.__vestBracketsVer;
   if (prevVer === VERSION && document.getElementById('vb-panel')?.dataset?.vbMount === VERSION) return;
   if (win.__vestBracketsLoaded) {
@@ -47,6 +47,8 @@
     trailStepPts: 1,
     trailLimitOffsetPts: 0,
     autoSupportCode: true,
+    panelX: null,
+    panelY: null,
   });
 
   let S = loadSettings();
@@ -2672,14 +2674,24 @@
     css.id = 'vb-styles';
     css.textContent = `
       #vb-panel {
-        position: fixed; left: 12px; bottom: 72px; z-index: 2147482900;
+        position: fixed; left: 12px; bottom: 72px; top: auto; right: auto; z-index: 2147482900;
         width: min(92vw, 360px); padding: 12px 14px;
         background: rgba(8,12,22,.96); border: 1px solid #334155; border-radius: 12px;
         color: #e2e8f0; font: 12px/1.4 system-ui, sans-serif;
         box-shadow: 0 12px 40px rgba(0,0,0,.45); backdrop-filter: blur(10px);
       }
       #vb-panel[hidden] { display: none !important; }
-      #vb-panel h2 { margin: 0 0 2px; font-size: 14px; color: #38bdf8; }
+      #vb-panel .vb-panel-head {
+        display: flex; align-items: center; justify-content: space-between;
+        gap: 8px; margin: 0 0 2px; padding: 2px 0 4px;
+        cursor: grab; user-select: none; touch-action: none;
+      }
+      #vb-panel.vb-dragging .vb-panel-head { cursor: grabbing; }
+      #vb-panel h2 { margin: 0; font-size: 14px; color: #38bdf8; flex: 1; }
+      #vb-panel .vb-drag-hint {
+        opacity: 0.5; font-size: 13px; line-height: 1; color: #94a3b8;
+        letter-spacing: 1px;
+      }
       #vb-panel .vb-support {
         margin: 0 0 8px; font-size: 10px; line-height: 1.35; color: #94a3b8; font-weight: 500;
       }
@@ -2775,6 +2787,96 @@
     (document.documentElement || document.head).appendChild(css);
   }
 
+  function applyPanelPosition(panel) {
+    if (!panel) return;
+    if (Number.isFinite(S.panelX) && Number.isFinite(S.panelY)) {
+      const { x, y } = clampPanelPos(S.panelX, S.panelY, panel);
+      S.panelX = x;
+      S.panelY = y;
+      panel.style.left = `${x}px`;
+      panel.style.top = `${y}px`;
+      panel.style.bottom = 'auto';
+      panel.style.right = 'auto';
+    } else {
+      panel.style.left = '12px';
+      panel.style.bottom = '72px';
+      panel.style.top = 'auto';
+      panel.style.right = 'auto';
+    }
+  }
+
+  function clampPanelPos(x, y, panel) {
+    const r = panel.getBoundingClientRect();
+    const w = r.width > 0 ? r.width : 320;
+    const h = r.height > 0 ? r.height : 320;
+    const maxX = Math.max(0, win.innerWidth - w - 8);
+    const maxY = Math.max(0, win.innerHeight - h - 8);
+    return {
+      x: Math.min(maxX, Math.max(8, Math.round(x))),
+      y: Math.min(maxY, Math.max(8, Math.round(y))),
+    };
+  }
+
+  function panelSnapToTopLeft(panel) {
+    const rect = panel.getBoundingClientRect();
+    S.panelX = Math.round(rect.left);
+    S.panelY = Math.round(rect.top);
+    panel.style.left = `${S.panelX}px`;
+    panel.style.top = `${S.panelY}px`;
+    panel.style.bottom = 'auto';
+    panel.style.right = 'auto';
+  }
+
+  function wirePanelDrag(panel) {
+    if (panel.__vbDrag === VERSION) return;
+    panel.__vbDrag = VERSION;
+    const head = panel.querySelector('.vb-panel-head');
+    if (!head) return;
+    let drag = null;
+    const onMove = (e) => {
+      if (!drag) return;
+      const { x, y } = clampPanelPos(e.clientX - drag.dx, e.clientY - drag.dy, panel);
+      panel.style.left = `${x}px`;
+      panel.style.top = `${y}px`;
+      panel.style.bottom = 'auto';
+    };
+    const endDrag = () => {
+      if (!drag) return;
+      const pid = drag.pid;
+      drag = null;
+      panel.classList.remove('vb-dragging');
+      try { head.releasePointerCapture(pid); } catch {}
+      const rect = panel.getBoundingClientRect();
+      const { x, y } = clampPanelPos(rect.left, rect.top, panel);
+      S.panelX = x;
+      S.panelY = y;
+      panel.style.left = `${x}px`;
+      panel.style.top = `${y}px`;
+      persist();
+      win.removeEventListener('pointermove', onMove);
+      win.removeEventListener('pointerup', endDrag);
+      win.removeEventListener('pointercancel', endDrag);
+    };
+    head.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      if (e.target.closest('button, input, a, select, textarea')) return;
+      e.preventDefault();
+      panelSnapToTopLeft(panel);
+      const rect = panel.getBoundingClientRect();
+      drag = { dx: e.clientX - rect.left, dy: e.clientY - rect.top, pid: e.pointerId };
+      panel.classList.add('vb-dragging');
+      try { head.setPointerCapture(e.pointerId); } catch {}
+      win.addEventListener('pointermove', onMove);
+      win.addEventListener('pointerup', endDrag);
+      win.addEventListener('pointercancel', endDrag);
+    });
+    win.addEventListener('resize', () => {
+      if (!Number.isFinite(S.panelX) || !Number.isFinite(S.panelY)) return;
+      applyPanelPosition(panel);
+      persist();
+    });
+  }
+
   function wirePanelActions(panel) {
     if (panel.__vbWired === VERSION) return;
     panel.__vbWired = VERSION;
@@ -2855,6 +2957,8 @@
     const stale = document.getElementById('vb-panel');
     if (stale && stale.dataset.vbMount === VERSION) {
       wirePanelActions(stale);
+      wirePanelDrag(stale);
+      applyPanelPosition(stale);
       return;
     }
     stale?.remove();
@@ -2863,7 +2967,10 @@
     panel.dataset.vbMount = VERSION;
     panel.hidden = !S.showPanel;
     panel.innerHTML = `
-      <h2>Ratchet Stop</h2>
+      <div class="vb-panel-head" title="Drag to move panel">
+        <h2>Ratchet Stop</h2>
+        <span class="vb-drag-hint" aria-hidden="true">⋮⋮</span>
+      </div>
       <p class="vb-support">Support code <code>${SUPPORT_CODE}</code> — auto-applied at Vest checkout</p>
       <p class="vb-help">
         <b>Market entry</b> with optional <b>trailing stop-limit</b>. USD size → Vest’s Long/Short, then we arm the trail. <b>Close</b> = this chart; <b>Flatten all</b> = account.
@@ -2899,6 +3006,8 @@
     `;
     document.documentElement.append(panel);
     wirePanelActions(panel);
+    wirePanelDrag(panel);
+    applyPanelPosition(panel);
     applyTrailSettingsToPanel();
 
     setTimeout(() => syncFromVestTicket({ quiet: true }), 800);
@@ -2907,7 +3016,7 @@
     setInterval(() => {
       const cs = activeChartSymbol();
       const sym = displaySymbol(apiSymbol(cs));
-      setStatus(`${sym} · ${accountName || accountId || '—'} · Alt+Shift+B hide panel`);
+      setStatus(`${sym} · ${accountName || accountId || '—'} · drag title to move · Alt+Shift+B hide`);
       refreshReadyLine();
       if (!ticketSynced) syncFromVestTicket({ quiet: true });
       else refreshPlanPreview();
