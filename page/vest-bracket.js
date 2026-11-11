@@ -4,7 +4,7 @@
   const win = window;
   if (win.top !== win.self) return;
 
-  const VERSION = '1.7.6';
+  const VERSION = '1.7.7';
   const prevVer = win.__vestBracketsVer;
   if (prevVer === VERSION && document.getElementById('vb-panel')?.dataset?.vbMount === VERSION) return;
   if (win.__vestBracketsLoaded) {
@@ -16,13 +16,14 @@
   win.__vestBracketsVer = VERSION;
   const API_HOST = 'api-gateway.hz.vestmarkets.com';
   const API_BASE = `https://${API_HOST}`;
-  const SYMBOL_MAP = {
-    'NQ-PERP': 'NDX-USD-PERP',
-    'ES-PERP': 'SPX-USD-PERP',
-    'MNQ-PERP': 'NDX-USD-PERP',
-    'MES-PERP': 'SPX-USD-PERP',
-  };
+  const SYMBOL_ALIASES = new Map([
+    ['NQ-PERP', 'NDX-USD-PERP'],
+    ['ES-PERP', 'SPX-USD-PERP'],
+    ['MNQ-PERP', 'NDX-USD-PERP'],
+    ['MES-PERP', 'SPX-USD-PERP'],
+  ]);
   const DEFAULT_TICK = { 'NQ-PERP': 0.25, 'ES-PERP': 0.25, 'MNQ-PERP': 0.25, 'MES-PERP': 0.25 };
+  let vestMarketSnap = { chart: '', api: '', tick: 0, at: 0 };
   const SUPPORT_CODE = 'AEthatsMe';
   const BT_CODE_ROUTES = /^\/(vest-capital(\/|$)|deposit\/get-funded(\/|$)|checkout(\/|$))/;
   const BT_CODE_SKIP = /^\/affiliates(\/|$)/;
@@ -356,6 +357,7 @@
       if (fromSnap > 1) lev = String(Math.round(fromSnap));
     }
     const usd = snap.unit === 'usd' && snap.size > 0 ? Number(snap.size) : null;
+    learnSymbolAlias(activeChartSymbol(), String(j.symbol));
     vestOpenSample = {
       at: Date.now(),
       symbol: String(j.symbol),
@@ -445,27 +447,186 @@
     }, true);
   }
 
-  function activeChartSymbol() {
-    const m = location.pathname.match(/\/trade\/([^/?#]+)/i);
-    if (m) return decodeURIComponent(m[1]);
-    const el = document.querySelector('[data-testid="market-selector-trigger"], [data-testid^="symbol"]');
-    const t = el?.textContent?.trim();
-    return t || 'NQ-PERP';
+  function symKey(s) {
+    return String(s || '').trim().toUpperCase();
   }
 
-  function apiSymbol(sym) {
-    const u = String(sym || '').toUpperCase();
-    return SYMBOL_MAP[u] || sym;
+  function escapeRe(s) {
+    return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  function isLikelyMarketSymbol(s) {
+    const t = String(s || '').trim();
+    if (t.length < 3 || t.length > 48) return false;
+    return /^[A-Za-z0-9][A-Za-z0-9._\-/]*$/.test(t);
+  }
+
+  function learnSymbolAlias(chartSym, apiSym) {
+    const chart = symKey(chartSym);
+    const api = String(apiSym || '').trim();
+    if (!chart || !api || chart === symKey(api)) return;
+    SYMBOL_ALIASES.set(chart, api);
+    vestMarketSnap = { chart, api, tick: vestMarketSnap.tick, at: Date.now() };
+  }
+
+  function readMarketFromFiber() {
+    const el = qVest('[data-testid="market-selector-trigger"]') || qVest('[data-testid="submit-long"]');
+    if (!el) return null;
+    const keys = ['symbol', 'market', 'product', 'marketSymbol', 'activeSymbol', 'instrument'];
+    let f = fiberOf(el);
+    for (let d = 0; f && d < 45; f = f.return, d++) {
+      const p = f.memoizedProps || f.pendingProps;
+      if (!p || typeof p !== 'object') continue;
+      for (const k of keys) {
+        if (isLikelyMarketSymbol(p[k])) return { api: String(p[k]).trim(), chart: null };
+      }
+      if (p.marketSpec?.symbol && isLikelyMarketSymbol(p.marketSpec.symbol)) {
+        return { api: String(p.marketSpec.symbol).trim(), chart: null };
+      }
+    }
+    return null;
+  }
+
+  function readVestMarketFromStores() {
+    const out = { chart: null, api: null, tick: 0 };
+    const seed = qVest('[data-testid="submit-long"]') || qVest('[data-testid="size-input"]')
+      || qVest('[data-testid="market-selector-trigger"]');
+    const pick = (v) => (isLikelyMarketSymbol(v) ? String(v).trim() : null);
+    const scanObj = (obj, depth, seen) => {
+      if (!obj || depth > 8 || typeof obj !== 'object' || seen.has(obj)) return;
+      seen.add(obj);
+      for (const k of ['activeSymbol', 'selectedSymbol', 'chartSymbol', 'displaySymbol', 'ticker', 'product']) {
+        const p = pick(obj[k]);
+        if (p && !out.chart) out.chart = p;
+      }
+      for (const k of ['symbol', 'market', 'marketSymbol', 'instrument', 'productId']) {
+        const p = pick(obj[k]);
+        if (p && !out.api) out.api = p;
+      }
+      if (obj.marketSpec && typeof obj.marketSpec === 'object') {
+        const ms = obj.marketSpec;
+        const api = pick(ms.symbol) || pick(ms.market) || pick(ms.product);
+        if (api) out.api = api;
+        const chart = pick(ms.displaySymbol) || pick(ms.shortName) || pick(ms.ticker);
+        if (chart) out.chart = chart;
+        const pd = Number(ms.priceDecimals);
+        const scale = Number.isInteger(pd) && pd >= 0 ? Math.pow(10, pd) : 1e6;
+        for (const tk of ['tickSize', 'priceTick', 'priceTickSize', 'priceStep', 'minPriceIncrement']) {
+          const n = bigToNum(ms[tk], scale);
+          if (n > 0) out.tick = n;
+        }
+      }
+      for (const k of ['market', 'trade', 'order', 'orderForm', 'router', 'params']) {
+        if (obj[k] && typeof obj[k] === 'object') scanObj(obj[k], depth + 1, seen);
+      }
+    };
+    walkZustandStores(seed, (st) => {
+      if (st && typeof st === 'object') scanObj(st, 0, new Set());
+    });
+    const fiber = readMarketFromFiber();
+    if (fiber?.api && !out.api) out.api = fiber.api;
+    return out;
+  }
+
+  function chartToApiHeuristic(chartSym) {
+    const chart = String(chartSym || '').trim();
+    const u = symKey(chart);
+    if (!u) return chart;
+    if (u.includes('-USD-')) return chart;
+    if (/-PERP$/i.test(chart)) {
+      const base = u.replace(/-PERP$/i, '');
+      if (base && !base.includes('-')) return `${base}-USD-PERP`;
+    }
+    return chart;
+  }
+
+  function activeChartSymbol() {
+    const m = location.pathname.match(/\/trade\/([^/?#]+)/i);
+    if (m) {
+      const fromPath = decodeURIComponent(m[1]).trim();
+      if (fromPath) return fromPath;
+    }
+    const vm = readVestMarketFromStores();
+    if (vm.chart) return vm.chart;
+    const el = qVest('[data-testid="market-selector-trigger"]') || document.querySelector('[data-testid^="symbol"]');
+    let t = (el?.textContent || el?.getAttribute('aria-label') || '').trim();
+    if (t) {
+      const token = t.split(/\s|\//)[0]?.trim();
+      if (isLikelyMarketSymbol(token)) return token;
+    }
+    return 'NQ-PERP';
+  }
+
+  function apiSymbol(chartSym) {
+    const chart = chartSym != null ? String(chartSym).trim() : activeChartSymbol();
+    const u = symKey(chart);
+    if (SYMBOL_ALIASES.has(u)) return SYMBOL_ALIASES.get(u);
+    const vm = readVestMarketFromStores();
+    if (vm.api) {
+      learnSymbolAlias(chart, vm.api);
+      vestMarketSnap = { chart: u, api: vm.api, tick: vm.tick || vestMarketSnap.tick, at: Date.now() };
+      if (symKey(vm.chart) === u && vm.api) return vm.api;
+      if (symKey(vm.api) === u) return vm.api;
+      if (vm.chart && symKey(vm.chart) !== u) learnSymbolAlias(vm.chart, vm.api);
+      return vm.api;
+    }
+    if (vestMarketSnap.api && vestMarketSnap.chart === u && Date.now() - vestMarketSnap.at < 120000) {
+      return vestMarketSnap.api;
+    }
+    const meta = readMarketMeta();
+    if (meta.apiSymbol) {
+      learnSymbolAlias(chart, meta.apiSymbol);
+      return meta.apiSymbol;
+    }
+    const guess = chartToApiHeuristic(chart);
+    learnSymbolAlias(chart, guess);
+    return guess;
   }
 
   function displaySymbol(sym) {
-    const rev = Object.fromEntries(Object.entries(SYMBOL_MAP).map(([k, v]) => [v, k]));
-    return rev[sym] || sym;
+    const s = String(sym || '').trim();
+    const k = symKey(s);
+    for (const [chart, api] of SYMBOL_ALIASES) {
+      if (symKey(api) === k) return chart;
+    }
+    if (/^[A-Z0-9]+-USD-PERP$/i.test(s)) return s.replace(/-USD-PERP$/i, '-PERP');
+    return s;
+  }
+
+  function symbolToken(sym) {
+    const d = displaySymbol(sym);
+    const m = d.match(/^([A-Za-z0-9]+)/);
+    return m ? m[1] : d.replace(/-PERP$/i, '');
   }
 
   function defaultTick(sym) {
-    const d = displaySymbol(sym);
+    const vm = readVestMarketFromStores();
+    if (vm.tick > 0) return vm.tick;
+    const meta = readMarketMeta();
+    if (meta.tick > 0) return meta.tick;
+    const d = displaySymbol(sym || activeChartSymbol());
     return DEFAULT_TICK[d] || S.tickSize || 0.25;
+  }
+
+  function symbolStem(s) {
+    return symKey(s)
+      .replace(/-USD-PERP$/i, '')
+      .replace(/-PERP$/i, '')
+      .replace(/-USD$/i, '');
+  }
+
+  function positionSymbolsMatch(rowSym, chartSym) {
+    const a = symKey(rowSym);
+    const raw = symKey(chartSym);
+    const api = symKey(apiSymbol(chartSym));
+    if (!a || !raw) return false;
+    if (a === api || a === raw) return true;
+    if (symKey(apiSymbol(a)) === api) return true;
+    if (symbolStem(a) && symbolStem(a) === symbolStem(raw)) return true;
+    if (symbolStem(a) === symbolStem(api)) return true;
+    const dRow = symKey(displaySymbol(rowSym));
+    const dChart = symKey(displaySymbol(apiSymbol(chartSym)));
+    return dRow === dChart || dRow === raw || symKey(apiSymbol(dChart)) === a;
   }
 
   function setReactInputValue(input, val) {
@@ -1249,19 +1410,28 @@
   }
 
   function readMarketMeta() {
-    const meta = { sizeDec: 6, step: 0.01, storeLev: 0, minQty: 0 };
+    const meta = { sizeDec: 6, step: 0.01, storeLev: 0, minQty: 0, tick: 0, apiSymbol: '' };
     walkZustandStores(qVest('[data-testid="submit-long"]') || qVest('[data-testid="size-input"]'), (st) => {
       if (!st?.marketSpec) return;
-      const sd = Number(st.marketSpec.sizeDecimals);
+      const ms = st.marketSpec;
+      const sd = Number(ms.sizeDecimals);
       if (Number.isInteger(sd) && sd >= 0) meta.sizeDec = sd;
       const pow = Math.pow(10, meta.sizeDec);
-      const raw = st.marketSpec.quantityStep ?? st.marketSpec.qtyStep ?? st.marketSpec.step;
+      const raw = ms.quantityStep ?? ms.qtyStep ?? ms.step;
       const s = bigToNum(raw, 1e6);
       if (s > 0) meta.step = s;
       else if (pow > 0) meta.step = 1 / pow;
-      const mn = st.marketSpec.minOrderQuantity ?? st.marketSpec.minQuantity ?? st.marketSpec.minQty;
+      const mn = ms.minOrderQuantity ?? ms.minQuantity ?? ms.minQty;
       const mq = bigToNum(mn, pow);
       if (mq > 0) meta.minQty = mq;
+      const pd = Number(ms.priceDecimals);
+      const priceScale = Number.isInteger(pd) && pd >= 0 ? Math.pow(10, pd) : 1e6;
+      for (const tk of ['tickSize', 'priceTick', 'priceTickSize', 'priceStep', 'minPriceIncrement']) {
+        const n = bigToNum(ms[tk], priceScale);
+        if (n > 0) meta.tick = n;
+      }
+      const sym = ms.symbol || ms.market;
+      if (isLikelyMarketSymbol(sym)) meta.apiSymbol = String(sym).trim();
       const lv = levFromRaw(st.leverage);
       if (lv >= 1) meta.storeLev = lv;
     });
@@ -1387,7 +1557,8 @@
       const b = qVest(`[data-testid="${id}"]`);
       if (!b || b.closest('#vb-panel')) continue;
       const blob = `${b.textContent || ''} ${b.getAttribute('aria-label') || ''} ${b.getAttribute('title') || ''}`;
-      const m = blob.match(/(\d+(?:\.\d+)?)\s*(?:NQ|MNQ|ES|MES|SPX|NDX)(?:\b|[-_])/i)
+      const tok = escapeRe(symbolToken(activeChartSymbol()));
+      const m = (tok ? blob.match(new RegExp(`(\\d+(?:\\.\\d+)?)\\s*${tok}(?:\\b|[-_])`, 'i')) : null)
         || blob.match(/(\d+(?:\.\d+)?)\s*contract/i);
       if (m) {
         const n = parseFloat(m[1]);
@@ -1415,10 +1586,11 @@
       if (n > 0 && n < 1e7) return n;
     }
     const sym = displaySymbol(apiSymbol(activeChartSymbol()));
+    const tok = escapeRe(symbolToken(sym));
     for (const el of panel.querySelectorAll('span, p, div, small, i')) {
       const t = (el.textContent || '').trim();
       if (t.length > 80 || t.length < 2) continue;
-      const symM = new RegExp(`(\\d+(?:\\.\\d+)?)\\s*(?:${sym}|NQ|MNQ|ES|MES)(?!\\s*USD)`, 'i').exec(t);
+      const symM = new RegExp(`(\\d+(?:\\.\\d+)?)\\s*(?:${escapeRe(sym)}|${tok})(?!\\s*USD)`, 'i').exec(t);
       if (symM) {
         const n = parseFloat(symM[1]);
         if (n > 0 && n < 1e4) return n;
@@ -1426,8 +1598,8 @@
     }
     const txt = panel.innerText || '';
     const patterns = [
-      /(?:≈|~|Est\.?|Estimated|Size)\s*[:\s]*\$?\s*(\d+(?:\.\d+)?)\s*(?:NQ|MNQ|ES|MES|contract|CT)\b/i,
-      /(\d+(?:\.\d+)?)\s*(?:NQ|MNQ|ES|MES)\b(?!\s*USD)/i,
+      new RegExp(`(?:≈|~|Est\\.?|Estimated|Size)\\s*[:\\s]*\\$?\\s*(\\d+(?:\\.\\d+)?)\\s*(?:${tok}|contract|CT)\\b`, 'i'),
+      new RegExp(`(\\d+(?:\\.\\d+)?)\\s*${tok}\\b(?!\\s*USD)`, 'i'),
       /(\d+(?:\.\d+)?)\s*contract/i,
     ];
     for (const re of patterns) {
@@ -2170,16 +2342,6 @@
 
   function rowAccountId(row) {
     return row?.accountId || row?.account_id || null;
-  }
-
-  function positionSymbolsMatch(rowSym, chartSym) {
-    const a = normSym(rowSym);
-    const api = normSym(apiSymbol(chartSym));
-    const raw = normSym(chartSym);
-    if (a === api || a === raw) return true;
-    const dRow = displaySymbol(a);
-    const dChart = displaySymbol(apiSymbol(chartSym));
-    return normSym(dRow) === normSym(dChart) || normSym(dRow) === normSym(chartSym);
   }
 
   async function fetchOpenPositions(acct) {
