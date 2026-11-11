@@ -4,7 +4,7 @@
   const win = window;
   if (win.top !== win.self) return;
 
-  const VERSION = '1.7.7';
+  const VERSION = '1.7.8';
   const prevVer = win.__vestBracketsVer;
   if (prevVer === VERSION && document.getElementById('vb-panel')?.dataset?.vbMount === VERSION) return;
   if (win.__vestBracketsLoaded) {
@@ -24,6 +24,13 @@
   ]);
   const DEFAULT_TICK = { 'NQ-PERP': 0.25, 'ES-PERP': 0.25, 'MNQ-PERP': 0.25, 'MES-PERP': 0.25 };
   let vestMarketSnap = { chart: '', api: '', tick: 0, at: 0 };
+  const vestExchangeInfo = {
+    byDisplay: new Map(SYMBOL_ALIASES),
+    byApi: new Map(),
+    displayForApi: new Map(),
+    loadedAt: 0,
+    loading: null,
+  };
   const SUPPORT_CODE = 'AEthatsMe';
   const BT_CODE_ROUTES = /^\/(vest-capital(\/|$)|deposit\/get-funded(\/|$)|checkout(\/|$))/;
   const BT_CODE_SKIP = /^\/affiliates(\/|$)/;
@@ -395,16 +402,36 @@
               const j = JSON.parse(raw);
               if (j?.accountId) captureAccountId(j.accountId);
               if (url.includes('/v3/positions/open')) captureVestOpen(j);
+              if (j?.symbol && isLikelyMarketSymbol(j.symbol)) {
+                learnSymbolAlias(activeChartSymbol(), j.symbol);
+                learnSymbolAlias(tradePathSlug() || activeChartSymbol(), j.symbol);
+              }
             } catch {}
           }
         }
       } catch {}
       const chain = orig(input, init);
+      if (url.includes(API_HOST) && url.includes('/v3/exchangeInfo')) {
+        return chain.then(async (res) => {
+          try {
+            const j = await res.clone().json();
+            if (Array.isArray(j?.symbols)) {
+              for (const row of j.symbols) ingestExchangeSymbolRow(row);
+              vestExchangeInfo.loadedAt = Date.now();
+            }
+          } catch {}
+          return res;
+        });
+      }
       if (url.includes(API_HOST) && url.includes('/v3/positions/open')) {
         return chain.then(async (res) => {
           try {
             const clone = res.clone();
             const j = await clone.json();
+            if (Array.isArray(j?.symbols)) {
+              for (const row of j.symbols) ingestExchangeSymbolRow(row);
+              vestExchangeInfo.loadedAt = Date.now();
+            }
             const pid = j?.positionId || j?.data?.positionId || j?.id;
             if (pid) vbTrail.lastOpenId = String(pid);
             const sl = j?.stopLosses || j?.data?.stopLosses;
@@ -466,7 +493,57 @@
     const api = String(apiSym || '').trim();
     if (!chart || !api || chart === symKey(api)) return;
     SYMBOL_ALIASES.set(chart, api);
+    vestExchangeInfo.byDisplay.set(chart, api);
+    vestExchangeInfo.byApi.set(symKey(api), api);
     vestMarketSnap = { chart, api, tick: vestMarketSnap.tick, at: Date.now() };
+  }
+
+  function ingestExchangeSymbolRow(row) {
+    if (!row?.symbol) return;
+    const api = String(row.symbol).trim();
+    const kApi = symKey(api);
+    vestExchangeInfo.byApi.set(kApi, api);
+    vestExchangeInfo.byDisplay.set(kApi, api);
+    const disp = row.displaySymbol ? String(row.displaySymbol).trim() : '';
+    if (disp) {
+      vestExchangeInfo.byDisplay.set(symKey(disp), api);
+      vestExchangeInfo.displayForApi.set(kApi, disp);
+      if (symKey(disp) !== kApi) SYMBOL_ALIASES.set(symKey(disp), api);
+    } else {
+      vestExchangeInfo.displayForApi.set(kApi, api);
+    }
+  }
+
+  async function refreshExchangeInfo(force) {
+    if (!nativeFetch) return;
+    if (!force && vestExchangeInfo.loadedAt && Date.now() - vestExchangeInfo.loadedAt < 3600000) return;
+    if (vestExchangeInfo.loading) return vestExchangeInfo.loading;
+    vestExchangeInfo.loading = (async () => {
+      try {
+        const r = await nativeFetch(`${API_BASE}/v3/exchangeInfo`, {
+          method: 'GET',
+          credentials: 'include',
+          headers: { accept: 'application/json' },
+        });
+        if (!r.ok) return;
+        const j = await r.json();
+        for (const row of j.symbols || []) ingestExchangeSymbolRow(row);
+        vestExchangeInfo.loadedAt = Date.now();
+      } catch {} finally {
+        vestExchangeInfo.loading = null;
+      }
+    })();
+    return vestExchangeInfo.loading;
+  }
+
+  function lookupCatalogSymbol(chartSym) {
+    const u = symKey(chartSym);
+    return vestExchangeInfo.byDisplay.get(u) || vestExchangeInfo.byApi.get(u) || null;
+  }
+
+  function tradePathSlug() {
+    const m = location.pathname.match(/\/trade\/([^/?#]+)/i);
+    return m ? decodeURIComponent(m[1]).trim() : '';
   }
 
   function readMarketFromFiber() {
@@ -492,52 +569,38 @@
     const seed = qVest('[data-testid="submit-long"]') || qVest('[data-testid="size-input"]')
       || qVest('[data-testid="market-selector-trigger"]');
     const pick = (v) => (isLikelyMarketSymbol(v) ? String(v).trim() : null);
-    const scanObj = (obj, depth, seen) => {
-      if (!obj || depth > 8 || typeof obj !== 'object' || seen.has(obj)) return;
-      seen.add(obj);
-      for (const k of ['activeSymbol', 'selectedSymbol', 'chartSymbol', 'displaySymbol', 'ticker', 'product']) {
-        const p = pick(obj[k]);
-        if (p && !out.chart) out.chart = p;
-      }
-      for (const k of ['symbol', 'market', 'marketSymbol', 'instrument', 'productId']) {
-        const p = pick(obj[k]);
-        if (p && !out.api) out.api = p;
-      }
-      if (obj.marketSpec && typeof obj.marketSpec === 'object') {
-        const ms = obj.marketSpec;
-        const api = pick(ms.symbol) || pick(ms.market) || pick(ms.product);
-        if (api) out.api = api;
-        const chart = pick(ms.displaySymbol) || pick(ms.shortName) || pick(ms.ticker);
-        if (chart) out.chart = chart;
-        const pd = Number(ms.priceDecimals);
-        const scale = Number.isInteger(pd) && pd >= 0 ? Math.pow(10, pd) : 1e6;
-        for (const tk of ['tickSize', 'priceTick', 'priceTickSize', 'priceStep', 'minPriceIncrement']) {
-          const n = bigToNum(ms[tk], scale);
-          if (n > 0) out.tick = n;
-        }
-      }
-      for (const k of ['market', 'trade', 'order', 'orderForm', 'router', 'params']) {
-        if (obj[k] && typeof obj[k] === 'object') scanObj(obj[k], depth + 1, seen);
-      }
-    };
     walkZustandStores(seed, (st) => {
-      if (st && typeof st === 'object') scanObj(st, 0, new Set());
+      const ms = st?.marketSpec;
+      if (!ms || typeof ms !== 'object') return;
+      const api = pick(ms.symbol) || pick(ms.market);
+      if (api) out.api = api;
+      const chart = pick(ms.displaySymbol) || pick(ms.shortName);
+      if (chart) out.chart = chart;
+      const pd = Number(ms.priceDecimals);
+      const scale = Number.isInteger(pd) && pd >= 0 ? Math.pow(10, pd) : 1e6;
+      for (const tk of ['tickSize', 'priceTick', 'priceTickSize', 'priceStep', 'minPriceIncrement']) {
+        const n = bigToNum(ms[tk], scale);
+        if (n > 0) out.tick = n;
+      }
     });
     const fiber = readMarketFromFiber();
     if (fiber?.api && !out.api) out.api = fiber.api;
     return out;
   }
 
-  function chartToApiHeuristic(chartSym) {
-    const chart = String(chartSym || '').trim();
-    const u = symKey(chart);
-    if (!u) return chart;
-    if (u.includes('-USD-')) return chart;
-    if (/-PERP$/i.test(chart)) {
-      const base = u.replace(/-PERP$/i, '');
-      if (base && !base.includes('-')) return `${base}-USD-PERP`;
-    }
-    return chart;
+  function readOrderDraftSymbol() {
+    let sym = null;
+    const seed = qVest('[data-testid="submit-long"]') || qVest('[data-testid="size-input"]');
+    walkZustandStores(seed, (st) => {
+      if (sym || !st) return;
+      for (const v of [
+        st.orderForm?.symbol, st.order?.symbol, st.draft?.symbol,
+        st.ticket?.symbol, st.values?.symbol,
+      ]) {
+        if (isLikelyMarketSymbol(v)) { sym = String(v).trim(); return; }
+      }
+    });
+    return sym;
   }
 
   function activeChartSymbol() {
@@ -560,15 +623,28 @@
   function apiSymbol(chartSym) {
     const chart = chartSym != null ? String(chartSym).trim() : activeChartSymbol();
     const u = symKey(chart);
-    if (SYMBOL_ALIASES.has(u)) return SYMBOL_ALIASES.get(u);
+    const catalog = lookupCatalogSymbol(chart);
+    if (catalog) return catalog;
+    const pathSlug = tradePathSlug();
+    if (pathSlug) {
+      const fromPath = lookupCatalogSymbol(pathSlug);
+      if (fromPath) {
+        learnSymbolAlias(chart, fromPath);
+        return fromPath;
+      }
+      if (symKey(pathSlug) === u && /(-USD-PERP|-PERP)$/i.test(pathSlug)) return pathSlug;
+    }
     const vm = readVestMarketFromStores();
     if (vm.api) {
       learnSymbolAlias(chart, vm.api);
-      vestMarketSnap = { chart: u, api: vm.api, tick: vm.tick || vestMarketSnap.tick, at: Date.now() };
-      if (symKey(vm.chart) === u && vm.api) return vm.api;
-      if (symKey(vm.api) === u) return vm.api;
-      if (vm.chart && symKey(vm.chart) !== u) learnSymbolAlias(vm.chart, vm.api);
+      ingestExchangeSymbolRow({ symbol: vm.api, displaySymbol: vm.chart || chart });
       return vm.api;
+    }
+    const draft = readOrderDraftSymbol();
+    if (draft) {
+      const hit = lookupCatalogSymbol(draft) || draft;
+      learnSymbolAlias(chart, hit);
+      return hit;
     }
     if (vestMarketSnap.api && vestMarketSnap.chart === u && Date.now() - vestMarketSnap.at < 120000) {
       return vestMarketSnap.api;
@@ -578,18 +654,18 @@
       learnSymbolAlias(chart, meta.apiSymbol);
       return meta.apiSymbol;
     }
-    const guess = chartToApiHeuristic(chart);
-    learnSymbolAlias(chart, guess);
-    return guess;
+    void refreshExchangeInfo(true);
+    return chart;
   }
 
   function displaySymbol(sym) {
     const s = String(sym || '').trim();
     const k = symKey(s);
-    for (const [chart, api] of SYMBOL_ALIASES) {
+    const disp = vestExchangeInfo.displayForApi.get(k);
+    if (disp) return disp;
+    for (const [chart, api] of vestExchangeInfo.byDisplay) {
       if (symKey(api) === k) return chart;
     }
-    if (/^[A-Z0-9]+-USD-PERP$/i.test(s)) return s.replace(/-USD-PERP$/i, '-PERP');
     return s;
   }
 
@@ -2051,6 +2127,7 @@
     vbSyncing = true;
     try {
       if (manual) refreshSyncBadge({ busy: true });
+      void refreshExchangeInfo();
       const p = snapMarketPrice();
       const t = snapVestTicket();
       syncActiveAccountFromVest();
@@ -2240,6 +2317,7 @@
     if (!token) setAction('Waiting for Vest login token…', 'busy');
     await ensureToken();
     await ensureAccountId();
+    await refreshExchangeInfo();
     syncFromVestTicket({ quiet: true });
     if (isUsdTicket()) {
       return submitViaVestTicket(side);
@@ -3412,6 +3490,7 @@
 
   function boot() {
     installNetworkTap();
+    void refreshExchangeInfo(true);
     sessionPing();
     setInterval(sessionPing, 5000);
     setInterval(btCodeTick, 2200);
