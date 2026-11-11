@@ -4,7 +4,7 @@
   const win = window;
   if (win.top !== win.self) return;
 
-  const VERSION = '1.7.9';
+  const VERSION = '1.8.0';
   const prevVer = win.__vestBracketsVer;
   if (prevVer === VERSION && document.getElementById('vb-panel')?.dataset?.vbMount === VERSION) return;
   if (win.__vestBracketsLoaded) {
@@ -55,6 +55,7 @@
     trailStartPts: 10,
     trailStepPts: 1,
     trailLimitOffsetPts: 0,
+    trailSlMarket: true,
     autoSupportCode: true,
     panelX: null,
     panelY: null,
@@ -2238,7 +2239,10 @@
       const cfg = trailCfg();
       try {
         const sl = initialTrailStopPrices('long', ref);
-        trailLine = `Trail SL (limit): start <b>${cfg.start}</b> pt profit · trail <b>${cfg.dist}</b> pt · initial stop ~<b>${sl.trigger}</b> (limit ${sl.limit})`;
+        const exec = trailStopExecution() === 'market' ? 'market' : 'limit';
+        trailLine = exec === 'market'
+          ? `Trail SL (market): start <b>${cfg.start}</b> pt · trail <b>${cfg.dist}</b> pt · stop ~<b>${sl.trigger}</b>`
+          : `Trail SL (limit): start <b>${cfg.start}</b> pt · trail <b>${cfg.dist}</b> pt · stop ~<b>${sl.trigger}</b> (limit ${sl.limit})`;
       } catch {
         trailLine = '<span class="vb-dim">Trail on — Sync mid for stop preview</span>';
       }
@@ -2508,12 +2512,59 @@
     };
   }
 
+  function trailStopExecution() {
+    return S.trailSlMarket !== false ? 'market' : 'limit';
+  }
+
   function slLimitFromTrigger(side, trigger, tick, sym) {
     const t = Number(trigger);
-    const off = trailCfg().limitOff;
-    if (!(off > 0)) return formatApiPrice(t, tick, undefined, sym);
+    let off = trailCfg().limitOff;
+    if (!(off > 0)) off = Math.max(Number(tick) > 0 ? Number(tick) : 0.25, 0.01);
     const raw = side === 'long' ? t - off : t + off;
     return formatApiPrice(raw, tick, legRoundDir(side, 'sl'), sym);
+  }
+
+  function stopTriggerForGuard(st, row) {
+    let trig = Number(st?.lastTrig);
+    if (trig > 0) return trig;
+    const sl = parseSlLegs(row)[0];
+    if (sl?.trigger > 0) return sl.trigger;
+    const entry = positionEntry(row) || st?.entry;
+    if (!(entry > 0)) return NaN;
+    try {
+      const init = initialTrailStopPrices(st.side, entry, row?.symbol || st?.symbol);
+      return parseFloat(init.trigger);
+    } catch {
+      return NaN;
+    }
+  }
+
+  function priceBreachedStop(side, mid, trig, tick) {
+    const t = Number(trig);
+    const m = Number(mid);
+    if (!(t > 0) || !(m > 0)) return false;
+    const pad = Math.max((Number(tick) || 0.25) * 0.02, 0);
+    return side === 'long' ? m <= t + pad : m >= t - pad;
+  }
+
+  async function flattenIfStopBreached(st, row, mid) {
+    if (!st || !row || st.closing) return false;
+    const trig = stopTriggerForGuard(st, row);
+    if (!Number.isFinite(trig)) return false;
+    const tick = defaultTick(row.symbol || st.symbol);
+    if (!priceBreachedStop(st.side, mid, trig, tick)) return false;
+    st.closing = true;
+    try {
+      await ensureAccountId();
+      await apiClosePosition(accountId, row);
+      vbTrail.armed.delete(String(row.positionId));
+      toast(`Stop ${formatPrice(trig)} hit — position closed at market`);
+      return true;
+    } catch (e) {
+      st.closing = false;
+      toast(`Stop hit — close failed: ${e?.message || e}`);
+      return false;
+    }
   }
 
   function initialTrailStopPrices(side, refMid, sym) {
@@ -2534,11 +2585,12 @@
 
   function buildTrailStopLeg(side, refMid) {
     const { trigger, limit } = initialTrailStopPrices(side, refMid);
-    return {
-      executionType: 'limit',
+    const leg = {
+      executionType: trailStopExecution(),
       triggerPrice: trigger,
-      limitPrice: limit,
     };
+    if (leg.executionType === 'limit') leg.limitPrice = limit;
+    return leg;
   }
 
   function positionSide(row) {
@@ -2591,6 +2643,7 @@
       prevMid: null,
       sent: null,
       quiet: !!opts.quiet,
+      closing: false,
     });
   }
 
@@ -2640,29 +2693,35 @@
   async function apiAddStopLoss(acct, positionId, trigger, limit, sym) {
     const market = sym || apiSymbol(activeChartSymbol());
     const tick = defaultTick(market);
+    const exec = trailStopExecution();
     const body = {
       positionId: String(positionId),
-      executionType: 'limit',
+      executionType: exec,
       triggerPrice: normalizeApiPrice(trigger, tick, undefined, market),
-      limitPrice: normalizeApiPrice(limit, tick, undefined, market),
     };
+    if (exec === 'limit') {
+      body.limitPrice = normalizeApiPrice(limit ?? trigger, tick, undefined, market);
+    }
     return api('/v3/positions/stop-loss', { accountId: acct, method: 'POST', body });
   }
 
   async function apiUpdateStopLoss(acct, positionId, stopLossId, trigger, limit, prevTrig, prevLimit, sym) {
     const market = sym || apiSymbol(activeChartSymbol());
     const tick = defaultTick(market);
-    let lp = limit;
-    if (prevTrig != null && prevLimit != null && Number.isFinite(prevTrig) && Number.isFinite(prevLimit)) {
-      lp = formatApiPrice(prevLimit + (parseFloat(trigger) - prevTrig), tick, undefined, market);
-    }
+    const exec = trailStopExecution();
     const body = {
       positionId: String(positionId),
       stopLossId: String(stopLossId),
-      executionType: 'limit',
+      executionType: exec,
       triggerPrice: normalizeApiPrice(trigger, tick, undefined, market),
-      limitPrice: normalizeApiPrice(lp, tick, undefined, market),
     };
+    if (exec === 'limit') {
+      let lp = limit;
+      if (prevTrig != null && prevLimit != null && Number.isFinite(prevTrig) && Number.isFinite(prevLimit)) {
+        lp = formatApiPrice(prevLimit + (parseFloat(trigger) - prevTrig), tick, undefined, market);
+      }
+      body.limitPrice = normalizeApiPrice(lp ?? trigger, tick, undefined, market);
+    }
     return api('/v3/positions/stop-loss', { accountId: acct, method: 'PUT', body });
   }
 
@@ -2786,6 +2845,7 @@
       st.missRows = 0;
       const ep = positionEntry(row);
       if (ep > 0) st.entry = ep;
+      if (await flattenIfStopBreached(st, row, mid)) continue;
       const sl = parseSlLegs(row)[0];
       if (sl && sl.id !== st.legId) {
         st.legId = sl.id;
@@ -3437,7 +3497,7 @@
       </div>
       <div id="vb-preview">Size preview appears after sync.</div>
       <div class="vb-trail-box">
-        <label class="vb-trail-head"><input type="checkbox" id="vb-trail-on" checked> Trailing stop (limit)</label>
+        <label class="vb-trail-head"><input type="checkbox" id="vb-trail-on" checked> Trailing stop (market SL)</label>
         <div class="grid">
           <label>Trail distance (pts)<input type="number" id="vb-trail-dist" min="0.25" step="0.25" value="8"></label>
           <label>Start after profit (pts)<input type="number" id="vb-trail-start" min="0" step="0.25" value="10"></label>
