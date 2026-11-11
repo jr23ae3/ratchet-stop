@@ -4,7 +4,7 @@
   const win = window;
   if (win.top !== win.self) return;
 
-  const VERSION = '1.7.8';
+  const VERSION = '1.7.9';
   const prevVer = win.__vestBracketsVer;
   if (prevVer === VERSION && document.getElementById('vb-panel')?.dataset?.vbMount === VERSION) return;
   if (win.__vestBracketsLoaded) {
@@ -28,6 +28,7 @@
     byDisplay: new Map(SYMBOL_ALIASES),
     byApi: new Map(),
     displayForApi: new Map(),
+    priceDecimals: new Map(),
     loadedAt: 0,
     loading: null,
   };
@@ -512,6 +513,8 @@
     } else {
       vestExchangeInfo.displayForApi.set(kApi, api);
     }
+    const pd = Number(row.priceDecimals);
+    if (Number.isInteger(pd) && pd >= 0) vestExchangeInfo.priceDecimals.set(kApi, pd);
   }
 
   async function refreshExchangeInfo(force) {
@@ -1485,8 +1488,18 @@
     return (x * 1e4) / (1e4 + 10);
   }
 
+  function marketPriceDecimals(sym) {
+    const api = symKey(apiSymbol(sym || activeChartSymbol()));
+    const fromCat = vestExchangeInfo.priceDecimals.get(api);
+    if (Number.isInteger(fromCat) && fromCat >= 0) return fromCat;
+    const meta = readMarketMeta();
+    const pd = Number(meta.priceDecimals);
+    if (Number.isInteger(pd) && pd >= 0) return pd;
+    return 2;
+  }
+
   function readMarketMeta() {
-    const meta = { sizeDec: 6, step: 0.01, storeLev: 0, minQty: 0, tick: 0, apiSymbol: '' };
+    const meta = { sizeDec: 6, step: 0.01, storeLev: 0, minQty: 0, tick: 0, apiSymbol: '', priceDecimals: 2 };
     walkZustandStores(qVest('[data-testid="submit-long"]') || qVest('[data-testid="size-input"]'), (st) => {
       if (!st?.marketSpec) return;
       const ms = st.marketSpec;
@@ -1501,6 +1514,7 @@
       const mq = bigToNum(mn, pow);
       if (mq > 0) meta.minQty = mq;
       const pd = Number(ms.priceDecimals);
+      if (Number.isInteger(pd) && pd >= 0) meta.priceDecimals = pd;
       const priceScale = Number.isInteger(pd) && pd >= 0 ? Math.pow(10, pd) : 1e6;
       for (const tk of ['tickSize', 'priceTick', 'priceTickSize', 'priceStep', 'minPriceIncrement']) {
         const n = bigToNum(ms[tk], priceScale);
@@ -1997,11 +2011,12 @@
     return n.toFixed(d).replace(/\.?0+$/, (m) => (m === '.' ? '' : m));
   }
 
-  /** Vest API: trigger/limit prices allow at most 2 decimal places. */
-  function formatApiPrice(p, tick, dir) {
+  /** Vest API: trigger/limit decimal places are per-market (exchangeInfo priceDecimals). */
+  function formatApiPrice(p, tick, dir, sym) {
     const x = roundToTick(p, tick, dir);
     if (!Number.isFinite(x)) return '';
-    return x.toFixed(2);
+    const dec = marketPriceDecimals(sym);
+    return x.toFixed(dec);
   }
 
   function roundToTick(price, tick, dir) {
@@ -2493,25 +2508,28 @@
     };
   }
 
-  function slLimitFromTrigger(side, trigger, tick) {
+  function slLimitFromTrigger(side, trigger, tick, sym) {
     const t = Number(trigger);
     const off = trailCfg().limitOff;
-    if (!(off > 0)) return formatApiPrice(t, tick);
+    if (!(off > 0)) return formatApiPrice(t, tick, undefined, sym);
     const raw = side === 'long' ? t - off : t + off;
-    return formatApiPrice(raw, tick, legRoundDir(side, 'sl'));
+    return formatApiPrice(raw, tick, legRoundDir(side, 'sl'), sym);
   }
 
-  function initialTrailStopPrices(side, refMid) {
-    const chart = activeChartSymbol();
-    const tick = defaultTick(chart);
+  function initialTrailStopPrices(side, refMid, sym) {
+    const market = sym || apiSymbol(activeChartSymbol());
+    const tick = defaultTick(market);
     const mid = Number(refMid);
     if (!Number.isFinite(mid) || mid <= 0) throw new Error('No mid price — Sync first');
     const { dist } = trailCfg();
     const raw = side === 'long' ? mid - dist : mid + dist;
     let trigger = roundToTick(raw, tick, legRoundDir(side, 'sl'));
     trigger = parseFloat(nudgeLegPastMid(side, 'sl', trigger, mid, tick));
-    const limit = slLimitFromTrigger(side, trigger, tick);
-    return { trigger: formatApiPrice(trigger, tick, legRoundDir(side, 'sl')), limit };
+    const limit = slLimitFromTrigger(side, trigger, tick, market);
+    return {
+      trigger: formatApiPrice(trigger, tick, legRoundDir(side, 'sl'), market),
+      limit,
+    };
   }
 
   function buildTrailStopLeg(side, refMid) {
@@ -2613,35 +2631,37 @@
     return null;
   }
 
-  function normalizeApiPrice(value, tick, dir) {
+  function normalizeApiPrice(value, tick, dir, sym) {
     const n = parseFloat(value);
-    if (Number.isFinite(n)) return formatApiPrice(n, tick, dir);
+    if (Number.isFinite(n)) return formatApiPrice(n, tick, dir, sym);
     return String(value);
   }
 
   async function apiAddStopLoss(acct, positionId, trigger, limit, sym) {
-    const tick = defaultTick(sym || activeChartSymbol());
+    const market = sym || apiSymbol(activeChartSymbol());
+    const tick = defaultTick(market);
     const body = {
       positionId: String(positionId),
       executionType: 'limit',
-      triggerPrice: normalizeApiPrice(trigger, tick),
-      limitPrice: normalizeApiPrice(limit, tick),
+      triggerPrice: normalizeApiPrice(trigger, tick, undefined, market),
+      limitPrice: normalizeApiPrice(limit, tick, undefined, market),
     };
     return api('/v3/positions/stop-loss', { accountId: acct, method: 'POST', body });
   }
 
   async function apiUpdateStopLoss(acct, positionId, stopLossId, trigger, limit, prevTrig, prevLimit, sym) {
-    const tick = defaultTick(sym || activeChartSymbol());
+    const market = sym || apiSymbol(activeChartSymbol());
+    const tick = defaultTick(market);
     let lp = limit;
     if (prevTrig != null && prevLimit != null && Number.isFinite(prevTrig) && Number.isFinite(prevLimit)) {
-      lp = formatApiPrice(prevLimit + (parseFloat(trigger) - prevTrig), tick);
+      lp = formatApiPrice(prevLimit + (parseFloat(trigger) - prevTrig), tick, undefined, market);
     }
     const body = {
       positionId: String(positionId),
       stopLossId: String(stopLossId),
       executionType: 'limit',
-      triggerPrice: normalizeApiPrice(trigger, tick),
-      limitPrice: normalizeApiPrice(lp, tick),
+      triggerPrice: normalizeApiPrice(trigger, tick, undefined, market),
+      limitPrice: normalizeApiPrice(lp, tick, undefined, market),
     };
     return api('/v3/positions/stop-loss', { accountId: acct, method: 'PUT', body });
   }
@@ -2651,7 +2671,8 @@
     if (legs.length) return legs[0].id;
     const side = positionSide(row);
     const entry = positionEntry(row) || snapMarketPrice();
-    const { trigger, limit } = initialTrailStopPrices(side, entry);
+    const market = row.symbol || apiSymbol(activeChartSymbol());
+    const { trigger, limit } = initialTrailStopPrices(side, entry, market);
     const addRes = await apiAddStopLoss(accountId, row.positionId, trigger, limit, row.symbol);
     const fromRes = addRes?.stopLossId || addRes?.id || addRes?.data?.stopLossId || addRes?.data?.id;
     if (fromRes) return String(fromRes);
@@ -2706,8 +2727,8 @@
 
   function vbTrailStep(st, mid) {
     const { dist, start, step } = trailCfg();
-    const chart = activeChartSymbol();
-    const tick = defaultTick(chart);
+    const market = st.symbol || apiSymbol(activeChartSymbol());
+    const tick = defaultTick(market);
     const entry = Number(st.entry);
     const m = Number(mid);
     if (!(entry > 0) || !(m > 0) || !(tick > 0)) return { skip: 'no-price' };
@@ -2726,9 +2747,9 @@
     const maxSl = dir > 0 ? roundToTick(m - tick, tick, 'down') : roundToTick(m + tick, tick, 'up');
     if (dir * level > dir * maxSl) level = maxSl;
     out.level = level;
-    out.s = formatApiPrice(level, tick, legRoundDir(st.side, 'sl'));
+    out.s = formatApiPrice(level, tick, legRoundDir(st.side, 'sl'), market);
     out.trigger = out.s;
-    out.limit = slLimitFromTrigger(st.side, level, tick);
+    out.limit = slLimitFromTrigger(st.side, level, tick, market);
     if (!st.legId) {
       out.create = true;
       return out;

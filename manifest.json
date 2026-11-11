@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Ratchet Stop",
   "short_name": "Ratchet Stop",
-  "version": "1.7.8",
+  "version": "1.7.9",
   "description": "Ratchet Stop — Vest market entry, trailing stop-limits, close and flatten.",
   "minimum_chrome_version": "116",
   "icons": {
